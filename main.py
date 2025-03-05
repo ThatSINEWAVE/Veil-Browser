@@ -177,10 +177,10 @@ def _create_nav_button(icon_name):
     return btn
 
 
-class ModernBrowser(QMainWindow):
+class VeilBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
-        logger.info("Initializing ModernBrowser")
+        logger.info("Initializing Veil Browser")
 
         # Custom window flags to remove default title bar and enable resizing
         self.setWindowFlags(
@@ -618,7 +618,7 @@ def main():
         # Create Browser Instance
         logger.info("Creating browser window...")
         try:
-            browser = ModernBrowser()
+            browser = VeilBrowser()
             logger.info("Browser window instantiated successfully")
         except Exception as browser_init_error:
             logger.critical(f"Failed to create browser window: {browser_init_error}")
