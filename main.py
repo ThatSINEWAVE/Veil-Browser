@@ -387,21 +387,123 @@ class ModernBrowser(QMainWindow):
             logger.error(f"Error in mouseReleaseEvent: {e}")
 
     def navigate_to_url(self):
+        """
+        Improved URL navigation method with robust URL parsing and loading.
+
+        Handles various input scenarios:
+        - Adds protocol if missing
+        - Validates and sanitizes URL input
+        - Provides fallback for invalid URLs
+        """
         try:
-            url = self.address_bar.text()
-            if not url.startswith(('http://', 'https://')):
-                url = 'https://' + url
-            logger.info(f"Navigating to URL: {url}")
-            self.browser.setUrl(QUrl(url))
+            # Get raw URL input from address bar
+            raw_url = self.address_bar.text().strip()
+
+            # Handle empty input
+            if not raw_url:
+                logger.warning("Empty URL input")
+                return
+
+            # Attempt to parse and validate URL
+            try:
+                # Default to HTTPS if no protocol specified
+                if not raw_url.startswith(('http://', 'https://', 'file://')):
+                    # For search queries, use Google search
+                    if ' ' in raw_url or not ('.' in raw_url):
+                        raw_url = f'https://www.google.com/search?q={raw_url.replace(" ", "+")}'
+                    else:
+                        raw_url = 'https://' + raw_url
+
+                # Convert to QUrl for robust handling
+                qurl = QUrl(raw_url)
+
+                # Additional validation
+                if qurl.isValid():
+                    logger.info(f"Navigating to validated URL: {qurl.toString()}")
+                    self.browser.setUrl(qurl)
+
+                    # Optional: Focus back to web view
+                    self.browser.setFocus()
+                else:
+                    logger.warning(f"Invalid URL: {raw_url}")
+                    # Optionally show an error in address bar
+                    self.address_bar.setText("Invalid URL")
+
+            except Exception as parse_error:
+                logger.error(f"URL parsing error: {parse_error}")
+                # Fallback to search if parsing fails
+                search_url = f'https://www.google.com/search?q={raw_url.replace(" ", "+")}'
+                self.browser.setUrl(QUrl(search_url))
+
         except Exception as e:
-            logger.error(f"Navigation error: {e}")
+            logger.critical(f"Catastrophic navigation error: {e}")
 
     def update_address_bar(self, url):
+        """
+        Enhanced address bar update method with additional logging and safety checks.
+
+        Args:
+            url (QUrl): The URL that has been loaded
+        """
         try:
-            logger.info(f"URL changed to: {url.toString()}")
-            self.address_bar.setText(url.toString())
+            # Safely convert URL to string, handling potential None cases
+            url_string = url.toString() if url else "about:blank"
+
+            logger.info(f"Browser navigated to: {url_string}")
+
+            # Update address bar with current URL
+            self.address_bar.setText(url_string)
+
+            # Optional: Enable/disable navigation buttons based on browser history
+            self.back_btn.setEnabled(self.browser.history().canGoBack())
+            self.forward_btn.setEnabled(self.browser.history().canGoForward())
+
         except Exception as e:
             logger.error(f"Error updating address bar: {e}")
+            # Fallback to blank if update fails
+            self.address_bar.setText("about:blank")
+
+    def handle_load_progress(self, progress):
+        """
+        Optional progress tracking method to provide visual feedback during page load.
+
+        Args:
+            progress (int): Loading progress percentage (0-100)
+        """
+        logger.info(f"Page loading progress: {progress}%")
+
+        # Optional: Visual feedback, could be enhanced with a progress bar
+        if progress == 100:
+            logger.info("Page load complete")
+        elif progress < 100:
+            logger.info(f"Loading page: {progress}% complete")
+
+    def setup_browser_connections(self):
+        """
+        Centralized method to set up all browser-related signal connections.
+        """
+        # URL changed event
+        self.browser.urlChanged.connect(self.update_address_bar)
+
+        # Optional load progress tracking
+        self.browser.loadProgress.connect(self.handle_load_progress)
+
+        # Optional load finished event
+        self.browser.loadFinished.connect(self.on_load_finished)
+
+    def on_load_finished(self, ok):
+        """
+        Handle page load completion.
+
+        Args:
+            ok (bool): Indicates whether the page loaded successfully
+        """
+        if ok:
+            logger.info("Page loaded successfully")
+        else:
+            logger.warning("Page load failed")
+            # Optional: Display error in address bar
+            self.address_bar.setText("Load Failed")
 
     def center_window(self):
         try:
