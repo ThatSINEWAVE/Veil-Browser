@@ -1,33 +1,47 @@
 import sys
 import os
-import json
-from datetime import datetime, date
+import logging
+import platform
+import psutil
 from PyQt6.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QPushButton,
-    QToolButton,
-    QLabel,
-    QGraphicsDropShadowEffect,
-    QMessageBox,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLineEdit, QPushButton, QToolButton, QSizePolicy, QStyle, QLabel,
+    QGraphicsDropShadowEffect
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
-from PyQt6.QtCore import QUrl, Qt, QPoint, QTimer
-from PyQt6.QtGui import QIcon, QFont, QMouseEvent, QColor, QKeySequence, QAction
-import urllib.parse
-import traceback
+from PyQt6.QtWebEngineCore import QWebEngineProfile
+from PyQt6.QtCore import QUrl, Qt, QPoint
+from PyQt6.QtGui import QIcon, QAction, QFont, QMouseEvent, QColor, QPalette
 
 # Ensure data directory exists
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
-HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
-CACHE_DIR = os.path.join(DATA_DIR, "cache")
-os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+# Configure logging
+def setup_logging():
+    # Ensure log directory exists
+    log_dir = os.path.join(DATA_DIR, 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Log file path
+    log_file_path = os.path.join(log_dir, 'veil_browser.log')
+
+    # Configure logging to write to both console and file
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        handlers=[
+            logging.FileHandler(log_file_path, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    return logging.getLogger(__name__)
+
+
+# Set up logger
+logger = setup_logging()
 
 # Icon paths
 ICON_PATHS = {
@@ -36,65 +50,113 @@ ICON_PATHS = {
     "refresh": "icons/refresh.png",
     "windowMinimize": "icons/window-minimize.png",
     "windowMaximize": "icons/window-maximize.png",
-    "windowClose": "icons/window-close.png",
+    "windowClose": "icons/window-close.png"
 }
 
 
-class HistoryManager:
-    @staticmethod
-    def _load_history():
-        """Load history from JSON file."""
-        if not os.path.exists(HISTORY_FILE):
-            return {}
+class CustomTitleBar(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        logger.info("Initializing CustomTitleBar")
 
         try:
-            with open(HISTORY_FILE, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return {}
+            self.setStyleSheet("""
+                QWidget {
+                    background-color: #1a1a1a;
+                    border-bottom: 1px solid #333;
+                }
+            """)
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(5, 2, 5, 2)
+            logger.info("CustomTitleBar layout created with slim margins")
 
-    @staticmethod
-    def add_history_entry(url, timestamp=None):
-        """Add a new entry to the history."""
-        if timestamp is None:
-            timestamp = datetime.now().isoformat()
+            # App Title
+            self.title_label = QLabel("Veil")
+            self.title_label.setStyleSheet("""
+                QLabel {
+                    font-size: 12px;
+                    font-weight: bold;
+                    color: #a0a0a0;
+                    background-color: transparent;
+                    margin-left: 5px;
+                }
+            """)
+            layout.addWidget(self.title_label)
+            logger.info("Added app title label")
 
-        # Load existing history
-        history = HistoryManager._load_history()
+            # Spacer
+            layout.addStretch()
+            logger.info("Added layout stretch")
 
-        # Get the date as a string (without time)
-        entry_date = date.fromisoformat(timestamp.split("T")[0]).isoformat()
+            # Window Controls
+            self.minimize_btn = QToolButton()
+            self.maximize_btn = QToolButton()
+            self.close_btn = QToolButton()
 
-        # Create entry for the day if not exists
-        if entry_date not in history:
-            history[entry_date] = []
+            # Robust icon handling with local paths
+            try:
+                self.minimize_btn.setIcon(QIcon(ICON_PATHS["windowMinimize"]))
+                self.maximize_btn.setIcon(QIcon(ICON_PATHS["windowMaximize"]))
+                self.close_btn.setIcon(QIcon(ICON_PATHS["windowClose"]))
+                logger.info("Icons loaded successfully")
+            except Exception as e:
+                logger.error(f"Icon loading error: {e}")
+                # Fallback to monochrome icons
+                self.minimize_btn.setText("—")
+                self.maximize_btn.setText("□")
+                self.close_btn.setText("×")
+                logger.warning("Falling back to text-based window control buttons")
 
-        # Add the new entry
-        history[entry_date].append({"url": url, "timestamp": timestamp})
+            # Styling window control buttons
+            for btn in [self.minimize_btn, self.maximize_btn, self.close_btn]:
+                btn.setStyleSheet("""
+                    QToolButton {
+                        background-color: transparent;
+                        color: #a0a0a0;
+                        border: none;
+                        padding: 2px 5px;
+                        font-size: 12px;
+                        font-weight: bold;
+                    }
+                    QToolButton:hover {
+                        background-color: rgba(255,255,255,0.1);
+                        border-radius: 3px;
+                    }
+                """)
+                logger.info("Window control button styling applied")
 
-        # Sort entries for the day by timestamp
-        history[entry_date].sort(key=lambda x: x["timestamp"])
+            layout.addWidget(self.minimize_btn)
+            layout.addWidget(self.maximize_btn)
+            layout.addWidget(self.close_btn)
+            logger.info("Added window control buttons to layout")
 
-        # Write back to file
-        try:
-            with open(HISTORY_FILE, "w") as f:
-                json.dump(history, f, indent=2)
-        except IOError as e:
-            print(f"Error writing history: {e}")
+            # Set a fixed height for the title bar
+            self.setFixedHeight(30)
+            logger.info("Set fixed title bar height to 30 pixels")
+
+        except Exception as e:
+            logger.critical(f"Fatal error in CustomTitleBar initialization: {e}")
+            raise
 
 
 def _create_nav_button(icon_name):
+    logger.info(f"Creating navigation button for {icon_name}")
     btn = QToolButton()
     try:
         # Use local icon paths
-        btn.setIcon(QIcon(ICON_PATHS.get(icon_name, "")))
+        btn.setIcon(QIcon(ICON_PATHS[icon_name]))
+        logger.info(f"Loaded icon for {icon_name}")
     except Exception as e:
-        print(f"Navigation icon error for {icon_name}: {e}")
+        logger.warning(f"Navigation icon error for {icon_name}: {e}")
         # Fallback to text-based buttons
-        btn.setText({"back": "←", "forward": "→", "refresh": "⟳"}.get(icon_name, ""))
+        btn.setText({
+                        "back": "←",
+                        "forward": "→",
+                        "refresh": "⟳"
+                    }[icon_name])
+        logger.warning(f"Using text fallback for {icon_name}")
 
-    btn.setStyleSheet(
-        """
+    btn.setStyleSheet("""
         QToolButton {
             background-color: transparent;
             color: #a0a0a0;
@@ -106,118 +168,48 @@ def _create_nav_button(icon_name):
             background-color: rgba(255,255,255,0.1);
             border-radius: 5px;
         }
-        QToolButton:disabled {
-            color: #555;
-        }
-    """
-    )
+    """)
+    logger.info(f"Styling applied to {icon_name} navigation button")
     return btn
-
-
-class CustomTitleBar(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setStyleSheet(
-            """
-            QWidget {
-                background-color: #1a1a1a;
-                border-bottom: 1px solid #333;
-            }
-        """
-        )
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 2, 5, 2)
-
-        # App Title
-        self.title_label = QLabel("Veil Browser")
-        self.title_label.setStyleSheet(
-            """
-            QLabel {
-                font-size: 12px;
-                font-weight: bold;
-                color: #a0a0a0;
-                background-color: transparent;
-                margin-left: 5px;
-            }
-        """
-        )
-        layout.addWidget(self.title_label)
-
-        # Spacer
-        layout.addStretch()
-
-        # Window Controls
-        self.minimize_btn = QToolButton()
-        self.maximize_btn = QToolButton()
-        self.close_btn = QToolButton()
-
-        # Robust icon handling with local paths
-        try:
-            self.minimize_btn.setIcon(QIcon(ICON_PATHS.get("windowMinimize", "")))
-            self.maximize_btn.setIcon(QIcon(ICON_PATHS.get("windowMaximize", "")))
-            self.close_btn.setIcon(QIcon(ICON_PATHS.get("windowClose", "")))
-        except Exception as e:
-            print(f"Icon loading error: {e}")
-            # Fallback to monochrome icons
-            self.minimize_btn.setText("—")
-            self.maximize_btn.setText("□")
-            self.close_btn.setText("×")
-
-        for btn in [self.minimize_btn, self.maximize_btn, self.close_btn]:
-            btn.setStyleSheet(
-                """
-                QToolButton {
-                    background-color: transparent;
-                    color: #a0a0a0;
-                    border: none;
-                    padding: 2px 5px;
-                    font-size: 12px;
-                    font-weight: bold;
-                }
-                QToolButton:hover {
-                    background-color: rgba(255,255,255,0.1);
-                    border-radius: 3px;
-                }
-            """
-            )
-
-        layout.addWidget(self.minimize_btn)
-        layout.addWidget(self.maximize_btn)
-        layout.addWidget(self.close_btn)
-
-        # Set a fixed height for the title bar
-        self.setFixedHeight(30)
 
 
 class ModernBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
-        # Custom window flags
+        logger.info("Initializing ModernBrowser")
+
+        # Custom window flags to remove default title bar and enable resizing
+        logger.info("Setting custom window flags")
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowMinimizeButtonHint
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowMaximizeButtonHint |
+            Qt.WindowType.WindowMinimizeButtonHint
         )
 
         # Enable window resizing
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
+        logger.info("Window resizing enabled")
+
+        # Add window resize capability
         self.setMouseTracking(True)
+        logger.info("Mouse tracking enabled for window resizing")
 
         # Variables for window dragging
         self._drag_position = QPoint()
         self._resizing = False
         self._resize_margin = 10  # Resize handle thickness
+        logger.info(f"Set resize margin to {self._resize_margin} pixels")
 
-        # Main container
+        # Main container with subtle border
         main_container = QWidget()
-        main_container.setStyleSheet(
-            """
+        main_container.setStyleSheet("""
             QWidget {
                 background-color: #121212;
                 border: 1px solid #2a2a2a;
                 border-radius: 8px;
             }
-        """
-        )
+        """)
+        logger.info("Created main container with dark, subtle styling")
 
         # Add subtle shadow effect
         shadow = QGraphicsDropShadowEffect(main_container)
@@ -225,27 +217,33 @@ class ModernBrowser(QMainWindow):
         shadow.setColor(QColor(0, 0, 0, 80))
         shadow.setOffset(0, 0)
         main_container.setGraphicsEffect(shadow)
+        logger.info("Added subtle shadow effect to main container")
 
         main_layout = QVBoxLayout(main_container)
-        main_layout.setContentsMargins(1, 1, 1, 1)
+        main_layout.setContentsMargins(1, 1, 1, 1)  # Thin border
         main_layout.setSpacing(0)
+        logger.info("Created main layout with minimal margins")
 
         # Custom Title Bar
         self.title_bar = CustomTitleBar()
         main_layout.addWidget(self.title_bar)
+        logger.info("Added custom title bar to main layout")
 
         # Connect title bar buttons
         self.title_bar.minimize_btn.clicked.connect(self.showMinimized)
         self.title_bar.maximize_btn.clicked.connect(self.toggle_maximize)
         self.title_bar.close_btn.clicked.connect(self.close)
+        logger.info("Connected title bar button events")
 
         # Make title bar draggable
         self.title_bar.mousePressEvent = self.mousePressEvent
         self.title_bar.mouseMoveEvent = self.mouseMoveEvent
+        logger.info("Made title bar draggable")
 
         # Navigation Layout
         nav_layout = QHBoxLayout()
         nav_layout.setContentsMargins(10, 5, 10, 5)
+        logger.info("Created navigation layout")
 
         # Navigation Buttons
         self.back_btn = _create_nav_button("back")
@@ -255,11 +253,11 @@ class ModernBrowser(QMainWindow):
         nav_layout.addWidget(self.back_btn)
         nav_layout.addWidget(self.forward_btn)
         nav_layout.addWidget(self.refresh_btn)
+        logger.info("Added navigation buttons to layout")
 
         # Address Bar
         self.address_bar = QLineEdit()
-        self.address_bar.setStyleSheet(
-            """
+        self.address_bar.setStyleSheet("""
             QLineEdit {
                 padding: 6px;
                 border: 1px solid #333;
@@ -273,16 +271,14 @@ class ModernBrowser(QMainWindow):
                 outline: none;
                 box-shadow: 0 0 5px rgba(74, 74, 74, 0.3);
             }
-        """
-        )
-        self.address_bar.returnPressed.connect(self.navigate_to_address)
-        self.address_bar.setPlaceholderText("Enter URL or search term")
+        """)
+        self.address_bar.returnPressed.connect(self.navigate_to_url)
         nav_layout.addWidget(self.address_bar, stretch=1)
+        logger.info("Added styled address bar")
 
         # Go Button
         self.go_btn = QPushButton("Go")
-        self.go_btn.setStyleSheet(
-            """
+        self.go_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2a2a2a;
                 color: #a0a0a0;
@@ -295,283 +291,252 @@ class ModernBrowser(QMainWindow):
             QPushButton:hover {
                 background-color: #3a3a3a;
             }
-        """
-        )
-        self.go_btn.clicked.connect(self.navigate_to_address)
+        """)
+        self.go_btn.clicked.connect(self.navigate_to_url)
         nav_layout.addWidget(self.go_btn)
+        logger.info("Added 'Go' button")
 
         main_layout.addLayout(nav_layout)
 
-        # Web View Setup
-        profile = QWebEngineProfile.defaultProfile()
-        profile.setCachePath(CACHE_DIR)
-        profile.setPersistentStoragePath(CACHE_DIR)
-        profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
-        profile.setHttpCacheMaximumSize(1024 * 1024 * 100)  # 100 MB cache
-
+        # Web View
         self.browser = QWebEngineView()
-
-        # Configure WebEngine settings for performance
-        settings = self.browser.page().settings()
-        settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, False)
-        settings.setAttribute(
-            QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False
-        )
-
-        self.browser.setStyleSheet(
-            """
+        self.browser.setStyleSheet("""
             QWebEngineView {
                 border-bottom-left-radius: 8px;
                 border-bottom-right-radius: 8px;
             }
-        """
-        )
-
-        # Progress indicator
-        self.loading_label = QLabel("Loading...")
-        self.loading_label.setStyleSheet(
-            """
-            QLabel {
-                color: #a0a0a0;
-                font-size: 12px;
-                padding: 5px;
-                background-color: rgba(0,0,0,0.5);
-                border-radius: 5px;
-            }
-        """
-        )
-        self.loading_label.hide()
-
-        # Load Overlay Layout
-        loading_layout = QVBoxLayout()
-        loading_layout.addStretch()
-        loading_layout.addWidget(
-            self.loading_label, alignment=Qt.AlignmentFlag.AlignCenter
-        )
-        loading_layout.addStretch()
-
-        # Add loading label to main layout
-        main_layout.addLayout(loading_layout)
+        """)
+        self.browser.setUrl(QUrl("https://www.google.com"))
         main_layout.addWidget(self.browser)
+        logger.info("Created web view and set initial URL to Google")
 
         self.setCentralWidget(main_container)
 
         # Connect browser events
-        self.browser.loadStarted.connect(self.on_load_started)
-        self.browser.loadFinished.connect(self.on_load_finished)
-
-        # Url change and history logging
-        self.browser.page().urlChanged.connect(self.update_address_bar)
-        self.browser.page().urlChanged.connect(self.log_history)
-
-        # Connect navigation buttons
+        self.browser.urlChanged.connect(self.update_address_bar)
         self.back_btn.clicked.connect(self.browser.back)
         self.forward_btn.clicked.connect(self.browser.forward)
         self.refresh_btn.clicked.connect(self.browser.reload)
-
-        # Enable/Disable navigation buttons based on browser state
-        self.browser.page().navigationsChanged.connect(self.update_navigation_buttons)
-
-        # Shortcuts
-        self.setup_keyboard_shortcuts()
-
-        # Initial navigation
-        self.browser.setUrl(QUrl("https://www.google.com"))
+        logger.info("Connected browser navigation events")
 
         # Window sizing and positioning
         self.resize(1200, 800)
         self.center_window()
-
-    def setup_keyboard_shortcuts(self):
-        """Set up keyboard shortcuts for browser actions"""
-        # Back shortcut
-        back_shortcut = QKeySequence(Qt.Key.Key_Left | Qt.KeyboardModifier.AltModifier)
-        self.back_action = QAction("Back", self)
-        self.back_action.setShortcut(back_shortcut)
-        self.back_action.triggered.connect(self.browser.back)
-        self.addAction(self.back_action)
-
-        # Forward shortcut
-        forward_shortcut = QKeySequence(
-            Qt.Key.Key_Right | Qt.KeyboardModifier.AltModifier
-        )
-        self.forward_action = QAction("Forward", self)
-        self.forward_action.setShortcut(forward_shortcut)
-        self.forward_action.triggered.connect(self.browser.forward)
-        self.addAction(self.forward_action)
-
-        # Refresh shortcut
-        refresh_shortcut = QKeySequence(Qt.Key.Key_F5)
-        self.refresh_action = QAction("Refresh", self)
-        self.refresh_action.setShortcut(refresh_shortcut)
-        self.refresh_action.triggered.connect(self.browser.reload)
-        self.addAction(self.refresh_action)
-
-    def update_navigation_buttons(self):
-        """Update navigation button states based on browser history"""
-        page = self.browser.page()
-        self.back_btn.setEnabled(page.canGoBack())
-        self.forward_btn.setEnabled(page.canGoForward())
-
-    def on_load_started(self):
-        """Show loading indicator when page starts loading"""
-        self.loading_label.show()
-        # Use a short delay to prevent flickering
-        QTimer.singleShot(200, lambda: self.update_loading_label())
-
-    def update_loading_label(self):
-        """Update loading label with current URL"""
-        try:
-            current_url = self.loading_label.setText(f"Loading: {current_url}")
-        except Exception as e:
-            self.loading_label.setText("Loading...")
-            print(f"Error updating loading label: {e}")
-
-    def on_load_finished(self, success):
-        """Handle page load completion"""
-        self.loading_label.hide()
-
-        # Optional: Show error message if load failed
-        if not success:
-            error_msg = QMessageBox()
-            error_msg.setIcon(QMessageBox.Icon.Warning)
-            error_msg.setText("Page could not be loaded")
-            error_msg.setInformativeText(
-                "Please check the URL and your internet connection."
-            )
-            error_msg.setWindowTitle("Load Error")
-            error_msg.exec()
-
-    def navigate_to_address(self):
-        """Navigate to URL or perform Google search"""
-        address = self.address_bar.text().strip()
-
-        # Check if it's a valid URL
-        url = self.parse_address(address)
-        self.browser.setUrl(url)
-
-    def parse_address(self, address):
-        """Parse address bar input into a valid URL"""
-        if not address:
-            return QUrl("https://www.google.com")
-
-        # Check if it's a valid URL
-        if address.startswith(("http://", "https://", "www.")):
-            if not address.startswith(("http://", "https://")):
-                address = "https://" + address
-            return QUrl(address)
-
-        # Perform Google search
-        search_query = urllib.parse.quote(address)
-        return QUrl(f"https://www.google.com/search?q={search_query}")
-
-    def log_history(self, url):
-        """Log the browsing history"""
-        HistoryManager.add_history_entry(url.toString())
-
-    def update_address_bar(self, url):
-        """Update address bar with current URL"""
-        self.address_bar.setText(url.toString())
+        logger.info("Resized window to 1200x800 and centered")
 
     def toggle_maximize(self):
-        """Toggle window between maximized and normal states"""
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
+        try:
+            if self.isMaximized():
+                logger.info("Restoring window to normal size")
+                self.showNormal()
+            else:
+                logger.info("Maximizing window")
+                self.showMaximized()
+        except Exception as e:
+            logger.error(f"Error in toggle_maximize: {e}")
 
     def mousePressEvent(self, event: QMouseEvent):
-        """Handle mouse press for window dragging and resizing"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            x, y = event.position().x(), event.position().y()
-            width, height = self.width(), self.height()
+        try:
+            if event.button() == Qt.MouseButton.LeftButton:
+                x, y = event.position().x(), event.position().y()
+                width, height = self.width(), self.height()
 
-            # Check if near window edges for resizing
-            if (
-                x < self._resize_margin
-                or x > width - self._resize_margin
-                or y < self._resize_margin
-                or y > height - self._resize_margin
-            ):
-                self._resizing = True
-                self._drag_position = event.globalPosition().toPoint()
-            else:
-                # Normal dragging
-                self._drag_position = (
-                    event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                )
-            event.accept()
+                # Resize areas
+                if (x < self._resize_margin or x > width - self._resize_margin or
+                        y < self._resize_margin or y > height - self._resize_margin):
+                    logger.info(f"Entered resize mode at position x:{x}, y:{y}")
+                    self._resizing = True
+                    self._drag_position = event.globalPosition().toPoint()
+                else:
+                    # Normal dragging
+                    logger.info("Preparing to drag window")
+                    self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                event.accept()
+        except Exception as e:
+            logger.error(f"Error in mousePressEvent: {e}")
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        """Handle mouse move for window dragging and resizing"""
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            if self._resizing:
-                # Implement basic resizing logic
-                global_pos = event.globalPosition().toPoint()
-                diff = global_pos - self._drag_position
-                self.resize(
-                    max(self.minimumWidth(), self.width() + diff.x()),
-                    max(self.minimumHeight(), self.height() + diff.y()),
-                )
-                self._drag_position = global_pos
+        try:
+            if event.buttons() == Qt.MouseButton.LeftButton:
+                if self._resizing:
+                    # Implement basic resizing logic
+                    logger.info("Resizing window")
+                    global_pos = event.globalPosition().toPoint()
+                    diff = global_pos - self._drag_position
+                    self.resize(
+                        max(self.minimumWidth(), self.width() + diff.x()),
+                        max(self.minimumHeight(), self.height() + diff.y())
+                    )
+                    self._drag_position = global_pos
+                else:
+                    # Window dragging
+                    logger.info("Dragging window")
+                    self.move(event.globalPosition().toPoint() - self._drag_position)
+                event.accept()
             else:
-                # Window dragging
-                self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
-        else:
-            # Reset resizing state
-            self._resizing = False
+                # Reset resizing state
+                self._resizing = False
+        except Exception as e:
+            logger.error(f"Error in mouseMoveEvent: {e}")
 
     def mouseReleaseEvent(self, event):
-        """Reset resizing state on mouse release"""
-        self._resizing = False
+        try:
+            logger.info("Mouse button released, resetting resize state")
+            self._resizing = False
+        except Exception as e:
+            logger.error(f"Error in mouseReleaseEvent: {e}")
+
+    def navigate_to_url(self):
+        try:
+            url = self.address_bar.text()
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            logger.info(f"Navigating to URL: {url}")
+            self.browser.setUrl(QUrl(url))
+        except Exception as e:
+            logger.error(f"Navigation error: {e}")
+
+    def update_address_bar(self, url):
+        try:
+            logger.info(f"URL changed to: {url.toString()}")
+            self.address_bar.setText(url.toString())
+        except Exception as e:
+            logger.error(f"Error updating address bar: {e}")
 
     def center_window(self):
-        """Center the window on the screen"""
-        frame_geometry = self.frameGeometry()
-        screen_center = QApplication.primaryScreen().availableGeometry().center()
-        frame_geometry.moveCenter(screen_center)
-        self.move(frame_geometry.topLeft())
+        try:
+            frame_geometry = self.frameGeometry()
+            screen_center = QApplication.primaryScreen().availableGeometry().center()
+            frame_geometry.moveCenter(screen_center)
+            self.move(frame_geometry.topLeft())
+            logger.info("Window centered on screen")
+        except Exception as e:
+            logger.error(f"Error centering window: {e}")
 
 
 def main():
-    """Main application entry point"""
-    app = QApplication(sys.argv)
-
-    # Optional: Set app-wide font
-    font = QFont("Segoe UI", 9)  # Slightly smaller font
-    app.setFont(font)
-
-    # Global application styling
-    app.setStyleSheet(
-        """
-        QMainWindow {
-            background-color: #0a0a0a;
-        }
-        QWidget {
-            background-color: #0a0a0a;
-            color: #a0a0a0;
-        }
     """
-    )
-
-    # Error handling wrapper
+    Main entry point for the Veil web browser application.
+    Handles application initialization, configuration, and launch.
+    """
     try:
-        browser = ModernBrowser()
+        # Log application start
+        logger.info("=" * 50)
+        logger.info("🌐 Veil Browser - Application Startup")
+        logger.info("=" * 50)
+
+        # System and Environment Check
+        logger.info("Performing system environment check...")
+        logger.info(f"Python Version: {sys.version}")
+        logger.info(f"Operating System: {platform.platform()}")
+
+        # Initialize Qt Application
+        logger.info("Initializing Qt Application...")
+        app = QApplication(sys.argv)
+
+        # Application Metadata
+        app.setApplicationName("Veil Browser")
+        app.setApplicationVersion("1.0.0")
+        logger.info("Application metadata configured")
+
+        # Font Configuration
+        logger.info("Configuring application font...")
+        try:
+            # Attempt to use Segoe UI, fallback to system default
+            font = QFont("Segoe UI", 9)
+            app.setFont(font)
+            logger.info("Font set to Segoe UI, size 9")
+        except Exception as font_error:
+            logger.warning(f"Font configuration failed: {font_error}")
+            logger.warning("Falling back to system default font")
+
+        # Global Application Styling
+        logger.info("Applying global application stylesheet...")
+        app.setStyleSheet("""
+            QMainWindow {
+                background-color: #0a0a0a;
+            }
+            QWidget {
+                background-color: #0a0a0a;
+                color: #a0a0a0;
+            }
+        """)
+        logger.info("Global stylesheet applied successfully")
+
+        # Check Icon Paths
+        logger.info("Verifying icon resources...")
+        for icon_name, path in ICON_PATHS.items():
+            if not os.path.exists(path):
+                logger.warning(f"Icon not found: {path} for {icon_name}")
+            else:
+                logger.info(f"Icon verified: {path}")
+
+        # Create Browser Instance
+        logger.info("Creating browser window...")
+        try:
+            browser = ModernBrowser()
+            logger.info("Browser window instantiated successfully")
+        except Exception as browser_init_error:
+            logger.critical(f"Failed to create browser window: {browser_init_error}")
+            raise
+
+        # Display Browser
+        logger.info("Displaying browser window...")
         browser.show()
-        sys.exit(app.exec())
-    except Exception as e:
-        print(f"Critical error: {e}")
-        traceback.print_exc()
-        QMessageBox.critical(
-            None,
-            "Critical Error",
-            f"An unexpected error occurred:\n{e}\n\n" "The application will now close.",
-        )
+
+        # Screen and Display Information
+        primary_screen = QApplication.primaryScreen()
+        logger.info(f"Primary Screen: {primary_screen.name()}")
+        logger.info(f"Screen Resolution: {primary_screen.size().width()}x{primary_screen.size().height()}")
+
+        # Performance and Resource Logging
+        logger.info("System Resource Check:")
+
+        # Cross-platform memory information
+        try:
+            memory = psutil.virtual_memory()
+            logger.info(f"Total Memory: {memory.total / (1024 * 1024 * 1024):.2f} GB")
+            logger.info(f"Available Memory: {memory.available / (1024 * 1024 * 1024):.2f} GB")
+            logger.info(f"Memory Usage: {memory.percent}%")
+        except Exception as mem_error:
+            logger.warning(f"Could not retrieve memory information: {mem_error}")
+
+        # CPU Information
+        try:
+            logger.info(f"CPU Cores: {os.cpu_count()}")
+            logger.info(f"CPU Usage: {psutil.cpu_percent()}%")
+        except Exception as cpu_error:
+            logger.warning(f"Could not retrieve CPU information: {cpu_error}")
+
+        # Enter Event Loop
+        logger.info("=" * 50)
+        logger.info("🚀 Entering Application Event Loop")
+        logger.info("=" * 50)
+
+        # Run the application and capture exit code
+        exit_code = app.exec()
+
+        logger.info(f"Application exit code: {exit_code}")
+
+        # Exit with captured code
+        sys.exit(exit_code)
+
+    except Exception as global_error:
+        # Global error handler
+        logger.critical("=" * 50)
+        logger.critical("🚨 CRITICAL APPLICATION ERROR 🚨")
+        logger.critical("=" * 50)
+        logger.critical(f"Error Details: {global_error}")
+        logger.critical(f"Error Type: {type(global_error).__name__}")
+
+        # Optional: More detailed traceback
+        import traceback
+        logger.critical("Traceback:\n" + traceback.format_exc())
+
+        # Ensure application exits with error status
+        sys.exit(1)
 
 
 if __name__ == "__main__":
+    logger.info("Script started as main program")
     main()
