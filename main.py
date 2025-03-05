@@ -173,6 +173,22 @@ def _create_nav_button(icon_name):
     return btn
 
 
+def handle_load_progress(progress):
+    """
+    Track page loading progress.
+
+    Args:
+        progress (int): Loading progress percentage (0-100)
+    """
+    logger.info(f"Page loading progress: {progress}%")
+
+    # Optional: Visual feedback, could be enhanced with a progress bar
+    if progress == 100:
+        logger.info("Page load complete")
+    elif progress < 100:
+        logger.info(f"Loading page: {progress}% complete")
+
+
 class ModernBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -306,14 +322,24 @@ class ModernBrowser(QMainWindow):
                 border-bottom-right-radius: 8px;
             }
         """)
+
+        # Set up web engine profile
+        self.profile = QWebEngineProfile.defaultProfile()
+        self.page = self.browser.page()
+
+        # Connect page-specific signals
+        self.page.urlChanged.connect(self.update_address_bar)
+        self.page.loadProgress.connect(handle_load_progress)
+        self.page.loadFinished.connect(self.on_load_finished)
+
+        # Set initial URL
         self.browser.setUrl(QUrl("https://www.google.com"))
         main_layout.addWidget(self.browser)
         logger.info("Created web view and set initial URL to Google")
 
         self.setCentralWidget(main_container)
 
-        # Connect browser events
-        self.browser.urlChanged.connect(self.update_address_bar)
+        # Connect browser navigation buttons
         self.back_btn.clicked.connect(self.browser.back)
         self.forward_btn.clicked.connect(self.browser.forward)
         self.refresh_btn.clicked.connect(self.browser.reload)
@@ -389,11 +415,6 @@ class ModernBrowser(QMainWindow):
     def navigate_to_url(self):
         """
         Improved URL navigation method with robust URL parsing and loading.
-
-        Handles various input scenarios:
-        - Adds protocol if missing
-        - Validates and sanitizes URL input
-        - Provides fallback for invalid URLs
         """
         try:
             # Get raw URL input from address bar
@@ -422,11 +443,11 @@ class ModernBrowser(QMainWindow):
                     logger.info(f"Navigating to validated URL: {qurl.toString()}")
                     self.browser.setUrl(qurl)
 
-                    # Optional: Focus back to web view
+                    # Ensure focus on web view
                     self.browser.setFocus()
                 else:
                     logger.warning(f"Invalid URL: {raw_url}")
-                    # Optionally show an error in address bar
+                    # Show an error in address bar
                     self.address_bar.setText("Invalid URL")
 
             except Exception as parse_error:
@@ -454,29 +475,15 @@ class ModernBrowser(QMainWindow):
             # Update address bar with current URL
             self.address_bar.setText(url_string)
 
-            # Optional: Enable/disable navigation buttons based on browser history
-            self.back_btn.setEnabled(self.browser.history().canGoBack())
-            self.forward_btn.setEnabled(self.browser.history().canGoForward())
+            # Enable/disable navigation buttons based on browser history
+            page_history = self.browser.page().history()
+            self.back_btn.setEnabled(page_history.canGoBack())
+            self.forward_btn.setEnabled(page_history.canGoForward())
 
         except Exception as e:
             logger.error(f"Error updating address bar: {e}")
             # Fallback to blank if update fails
             self.address_bar.setText("about:blank")
-
-    def handle_load_progress(self, progress):
-        """
-        Optional progress tracking method to provide visual feedback during page load.
-
-        Args:
-            progress (int): Loading progress percentage (0-100)
-        """
-        logger.info(f"Page loading progress: {progress}%")
-
-        # Optional: Visual feedback, could be enhanced with a progress bar
-        if progress == 100:
-            logger.info("Page load complete")
-        elif progress < 100:
-            logger.info(f"Loading page: {progress}% complete")
 
     def setup_browser_connections(self):
         """
@@ -486,7 +493,7 @@ class ModernBrowser(QMainWindow):
         self.browser.urlChanged.connect(self.update_address_bar)
 
         # Optional load progress tracking
-        self.browser.loadProgress.connect(self.handle_load_progress)
+        self.browser.loadProgress.connect(handle_load_progress)
 
         # Optional load finished event
         self.browser.loadFinished.connect(self.on_load_finished)
