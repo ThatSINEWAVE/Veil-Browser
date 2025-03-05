@@ -1,0 +1,10 @@
+import os
+
+ICON_PATHS = {
+    "back": "icons/back.png",
+    "forward": "icons/forward.png",
+    "refresh": "icons/refresh.png",
+    "windowMinimize": "icons/window-minimize.png",
+    "windowMaximize": "icons/window-maximize.png",
+    "windowClose": "icons/window-close.png"
+}
