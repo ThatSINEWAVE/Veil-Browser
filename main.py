@@ -9,7 +9,11 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineProfile
+from PyQt6.QtWebEngineCore import (
+    QWebEngineProfile,
+    QWebEnginePage,
+    QWebEngineSettings
+)
 from PyQt6.QtCore import QUrl, Qt, QPoint
 from PyQt6.QtGui import QIcon, QAction, QFont, QMouseEvent, QColor, QPalette
 
@@ -173,29 +177,12 @@ def _create_nav_button(icon_name):
     return btn
 
 
-def handle_load_progress(progress):
-    """
-    Track page loading progress.
-
-    Args:
-        progress (int): Loading progress percentage (0-100)
-    """
-    logger.info(f"Page loading progress: {progress}%")
-
-    # Optional: Visual feedback, could be enhanced with a progress bar
-    if progress == 100:
-        logger.info("Page load complete")
-    elif progress < 100:
-        logger.info(f"Loading page: {progress}% complete")
-
-
 class ModernBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
         logger.info("Initializing ModernBrowser")
 
         # Custom window flags to remove default title bar and enable resizing
-        logger.info("Setting custom window flags")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowMaximizeButtonHint |
@@ -314,8 +301,44 @@ class ModernBrowser(QMainWindow):
 
         main_layout.addLayout(nav_layout)
 
-        # Web View
+        # Web View Configuration
         self.browser = QWebEngineView()
+
+        # Create a custom profile to enable JavaScript, cookies, and local storage
+        self.profile = QWebEngineProfile.defaultProfile()
+
+        # Enable JavaScript and other settings using a more robust method
+        settings = self.browser.settings()
+        try:
+            # Try different methods to enable JavaScript
+            settings.setAttribute(16, True)  # Using numeric value for JavascriptEnabled
+        except Exception as e:
+            logger.warning(f"Could not set JavaScript setting: {e}")
+            try:
+                # Fallback method (if exists)
+                settings.setAttribute('JavascriptEnabled', True)
+            except Exception as fallback_error:
+                logger.error(f"Fallback JavaScript setting failed: {fallback_error}")
+
+        # Create a custom page with the profile
+        self.page = QWebEnginePage(self.profile, self.browser)
+
+        # Set the custom page for the web view
+        self.browser.setPage(self.page)
+
+        # Connect page signals
+        self.page.urlChanged.connect(self.update_address_bar)
+        self.page.loadProgress.connect(self.handle_load_progress)
+        self.page.loadFinished.connect(self.on_load_finished)
+
+        # Create a context to allow interaction with web pages
+        self.page.runJavaScript("""
+            document.addEventListener('click', function(e) {
+                window.qt_page_clicked = true;
+            });
+        """)
+
+        # Stylesheet for the web view
         self.browser.setStyleSheet("""
             QWebEngineView {
                 border-bottom-left-radius: 8px;
@@ -323,17 +346,9 @@ class ModernBrowser(QMainWindow):
             }
         """)
 
-        # Set up web engine profile
-        self.profile = QWebEngineProfile.defaultProfile()
-        self.page = self.browser.page()
-
-        # Connect page-specific signals
-        self.page.urlChanged.connect(self.update_address_bar)
-        self.page.loadProgress.connect(handle_load_progress)
-        self.page.loadFinished.connect(self.on_load_finished)
-
-        # Set initial URL
-        self.browser.setUrl(QUrl("https://www.google.com"))
+        # Set initial URL and add to layout
+        initial_url = QUrl("https://www.google.com")
+        self.browser.setUrl(initial_url)
         main_layout.addWidget(self.browser)
         logger.info("Created web view and set initial URL to Google")
 
@@ -412,9 +427,31 @@ class ModernBrowser(QMainWindow):
         except Exception as e:
             logger.error(f"Error in mouseReleaseEvent: {e}")
 
+    def handle_load_progress(self, progress):
+        """
+        Track and log page loading progress.
+
+        Args:
+            progress (int): Percentage of page load progress (0-100)
+        """
+        try:
+            logger.info(f"Page loading progress: {progress}%")
+
+            # Optional: Update a status bar or progress indicator if needed
+            if hasattr(self, 'address_bar'):
+                if progress < 100:
+                    # Optionally modify address bar to show loading status
+                    current_text = self.address_bar.text()
+                    self.address_bar.setText(f"{current_text} - Loading ({progress}%)")
+                else:
+                    # Reset address bar when loading is complete
+                    self.update_address_bar(self.browser.url())
+        except Exception as e:
+            logger.error(f"Error in handle_load_progress: {e}")
+
     def navigate_to_url(self):
         """
-        Improved URL navigation method with robust URL parsing and loading.
+        Robust URL navigation method with enhanced parsing and loading.
         """
         try:
             # Get raw URL input from address bar
@@ -425,11 +462,11 @@ class ModernBrowser(QMainWindow):
                 logger.warning("Empty URL input")
                 return
 
-            # Attempt to parse and validate URL
+            # URL parsing and validation
             try:
                 # Default to HTTPS if no protocol specified
                 if not raw_url.startswith(('http://', 'https://', 'file://')):
-                    # For search queries, use Google search
+                    # For search queries or URLs without a dot
                     if ' ' in raw_url or not ('.' in raw_url):
                         raw_url = f'https://www.google.com/search?q={raw_url.replace(" ", "+")}'
                     else:
@@ -438,51 +475,48 @@ class ModernBrowser(QMainWindow):
                 # Convert to QUrl for robust handling
                 qurl = QUrl(raw_url)
 
-                # Additional validation
+                # Validate and load URL
                 if qurl.isValid():
                     logger.info(f"Navigating to validated URL: {qurl.toString()}")
-                    self.browser.setUrl(qurl)
+
+                    # Use the custom page to load the URL
+                    self.page.setUrl(qurl)
 
                     # Ensure focus on web view
                     self.browser.setFocus()
                 else:
                     logger.warning(f"Invalid URL: {raw_url}")
-                    # Show an error in address bar
                     self.address_bar.setText("Invalid URL")
 
             except Exception as parse_error:
                 logger.error(f"URL parsing error: {parse_error}")
-                # Fallback to search if parsing fails
+                # Fallback to search
                 search_url = f'https://www.google.com/search?q={raw_url.replace(" ", "+")}'
-                self.browser.setUrl(QUrl(search_url))
+                self.page.setUrl(QUrl(search_url))
 
         except Exception as e:
             logger.critical(f"Catastrophic navigation error: {e}")
 
     def update_address_bar(self, url):
         """
-        Enhanced address bar update method with additional logging and safety checks.
-
-        Args:
-            url (QUrl): The URL that has been loaded
+        Update address bar with current page URL and manage navigation buttons.
         """
         try:
-            # Safely convert URL to string, handling potential None cases
+            # Safely convert URL to string
             url_string = url.toString() if url else "about:blank"
 
             logger.info(f"Browser navigated to: {url_string}")
 
-            # Update address bar with current URL
+            # Update address bar
             self.address_bar.setText(url_string)
 
-            # Enable/disable navigation buttons based on browser history
-            page_history = self.browser.page().history()
-            self.back_btn.setEnabled(page_history.canGoBack())
-            self.forward_btn.setEnabled(page_history.canGoForward())
+            # Manage navigation button states
+            history = self.browser.page().history()
+            self.back_btn.setEnabled(history.canGoBack())
+            self.forward_btn.setEnabled(history.canGoForward())
 
         except Exception as e:
-            logger.error(f"Error updating address bar: {e}")
-            # Fallback to blank if update fails
+            logger.error(f"Address bar update error: {e}")
             self.address_bar.setText("about:blank")
 
     def setup_browser_connections(self):
@@ -500,16 +534,17 @@ class ModernBrowser(QMainWindow):
 
     def on_load_finished(self, ok):
         """
-        Handle page load completion.
-
-        Args:
-            ok (bool): Indicates whether the page loaded successfully
+        Handle page load completion with detailed logging.
         """
         if ok:
             logger.info("Page loaded successfully")
+            # Optional: Run a script to check page interactivity
+            self.page.runJavaScript("""
+                console.log('Page loaded and ready for interaction');
+                document.body.style.userSelect = 'auto';
+            """)
         else:
             logger.warning("Page load failed")
-            # Optional: Display error in address bar
             self.address_bar.setText("Load Failed")
 
     def center_window(self):
